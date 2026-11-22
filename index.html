@@ -19,6 +19,25 @@
 <body>
   <div class="shell">
     <p class="storage-warn" id="storageWarn" role="alert" hidden>这次没写进本机存储，请立刻导出备份。</p>
+
+    <div class="top-banners" id="topBanners">
+      <div class="demo-banner" id="demoBanner" hidden role="status">
+        <p class="demo-banner-text">这是示例数据 · 点这里开始记录你自己的</p>
+        <button class="btn small" id="clearDemoBtn" type="button">清空示例，开始写</button>
+      </div>
+
+      <section class="paper next-card" id="nextCard" hidden aria-labelledby="nextCardText">
+        <button class="icon-btn next-close" id="nextCardClose" type="button" aria-label="关闭">×</button>
+        <p class="next-card-text" id="nextCardText">
+          <span class="next-card-label">昨天你给自己定的第一步：</span><span id="nextCardContent"></span>
+        </p>
+        <div class="next-actions">
+          <button class="btn primary" id="nextApplyBtn" type="button">开始了，填进今天</button>
+          <button class="btn ghost" id="nextSkipBtn" type="button">今天不做这个</button>
+        </div>
+      </section>
+    </div>
+
     <header class="masthead">
       <div class="brand-row">
         <span class="brand">收工三行</span>

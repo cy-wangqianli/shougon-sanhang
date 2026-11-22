@@ -2,6 +2,7 @@
   'use strict';
 
   var STORAGE_KEY = 'shougon-sanhang.v1';
+  var IGNORE_NEXT_KEY = STORAGE_KEY + '.ignoreNext';
   var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   var TAGS = ['比赛', '学习', '生活', '其他'];
   var TAG_CLASS = { 比赛: 'tag-match', 学习: 'tag-study', 生活: 'tag-life', 其他: 'tag-other' };
@@ -12,7 +13,7 @@
     { key: 'next', label: '明天第一步', reportLabel: '明天第一步' }
   ];
 
-  var state = { version: 1, entries: {} };
+  var state = { version: 1, entries: {}, isDemo: false };
   var els = {};
   var isEditingToday = false;
   var pendingDelete = null;
@@ -22,6 +23,7 @@
   var reportRange = 'this';
   var toastTimer = null;
   var lastFocused = null;
+  var nextStepDismissed = false;
 
   /* ---------- 日期 ---------- */
 
@@ -162,8 +164,14 @@
   }
 
   function persist() {
+    // 示例数据只在内存里，任何写入都要在 isDemo 清零之后发生，避免假记录落盘
+    if (state.isDemo) return true;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries: state.entries }));
+      if (Object.keys(state.entries).length) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries: state.entries }));
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
       hideStorageWarn();
       return true;
     } catch (error) {
@@ -453,6 +461,7 @@
     renderHeader();
     renderCompose();
     renderTimeline();
+    renderTopBanners();
     els.guideCard.hidden = Object.keys(state.entries).length > 0;
   }
 
@@ -469,6 +478,12 @@
 
   function handleSubmit(event) {
     event.preventDefault();
+
+    // 第一次写自己的内容时，把示例数据整体清掉，避免假记录混进时间轴
+    if (state.isDemo) {
+      state.entries = {};
+      state.isDemo = false;
+    }
 
     var key = todayKey();
     var entry = { updatedAt: new Date().toISOString() };
@@ -588,6 +603,25 @@
     return days;
   }
 
+  // 卡点粗分类：按关键词命中，没命中归「其他」。顺序即优先级。
+  var BLOCKER_CATEGORIES = [
+    { name: '环境配置', keywords: ['环境', '配置', '安装', '依赖', '版本', '路径', '权限', '编译', '构建', 'node', 'npm', '证书', '环境变量', 'safari', '兼容', '白边', '缓存', 'cors', '跨域', '端口'] },
+    { name: '工具问题', keywords: ['工具', '软件', 'bug', '报错', '崩溃', '闪退', '加载', '卡顿', '插件', '编辑器', '服务器', '网络', 'git', '接口', 'api'] },
+    { name: '沟通协作', keywords: ['沟通', '协作', '会议', '同步', '对齐', '反馈', '讨论', '同学', '同事', '团队', '分工', '催'] },
+    { name: '时间安排', keywords: ['时间', '计划', '排期', '安排', '效率', '分心', '犯困', '加班', '拖延', 'deadline', '排太满', '进度', '节奏'] }
+  ];
+
+  function classifyBlocker(text) {
+    var lower = String(text).toLowerCase();
+    for (var i = 0; i < BLOCKER_CATEGORIES.length; i += 1) {
+      var cat = BLOCKER_CATEGORIES[i];
+      for (var j = 0; j < cat.keywords.length; j += 1) {
+        if (lower.indexOf(cat.keywords[j].toLowerCase()) >= 0) return cat.name;
+      }
+    }
+    return '其他';
+  }
+
   function buildWeeklyReport(weekStart, label) {
     var days = collectWeekDays(weekStart);
     if (!days.length) return '';
@@ -618,6 +652,36 @@
     var blockers = days.filter(function (item) {
       return item.entry.blocker && item.entry.blocker.text;
     });
+
+    // 本周最常卡在哪：按关键词聚类，放在「卡点」之前；没有卡点就整节省略
+    if (blockers.length) {
+      var buckets = { 其他: [] };
+      BLOCKER_CATEGORIES.forEach(function (cat) {
+        buckets[cat.name] = [];
+      });
+      blockers.forEach(function (item) {
+        var cat = classifyBlocker(item.entry.blocker.text);
+        if (!buckets[cat]) buckets[cat] = [];
+        buckets[cat].push(item);
+      });
+
+      var order = Object.keys(buckets).filter(function (name) {
+        return buckets[name].length > 0;
+      }).sort(function (a, b) {
+        return buckets[b].length - buckets[a].length;
+      });
+
+      out.push('## ' + label + '最常卡在哪');
+      out.push('');
+      order.forEach(function (name) {
+        out.push('- **' + name + '**（' + buckets[name].length + ' 次）');
+        buckets[name].forEach(function (item) {
+          var tag = item.entry.blocker.tag ? '（' + item.entry.blocker.tag + '）' : '';
+          out.push('  - ' + shortDate(item.date) + ' ' + weekdayName(item.date) + '：' + item.entry.blocker.text + tag);
+        });
+      });
+      out.push('');
+    }
 
     out.push('## ' + label + '卡点');
     out.push('');
@@ -810,6 +874,12 @@
         return;
       }
 
+      // 导入的是真实数据：先把内存里的示例清掉，也不弹「合并」确认
+      if (state.isDemo) {
+        state.entries = {};
+        state.isDemo = false;
+      }
+
       if (Object.keys(state.entries).length) {
         if (!window.confirm('导入会与现有记录合并，同一天以备份内容为准。继续？')) {
           return;
@@ -923,13 +993,9 @@
     return { text: value[0], tag: TAGS.indexOf(value[1]) >= 0 ? value[1] : null };
   }
 
-  function handleDemo() {
-    var params = new URLSearchParams(window.location.search);
-    if (params.get('demo') !== '1') return;
-    if (Object.keys(state.entries).length) return;
-
+  function seedDemo() {
     var today = new Date();
-    var count = 0;
+    state.entries = {};
 
     DEMO_DAYS.forEach(function (sample, offset) {
       if (!sample) return;
@@ -940,15 +1006,108 @@
         next: toDemoLine(sample.next),
         updatedAt: new Date(date.getFullYear(), date.getMonth(), date.getDate(), 21, 30).toISOString()
       };
-      count += 1;
     });
 
-    var saved = persist();
-    if (saved) {
+    // 示例数据只放在内存里，不写进本地存储：
+    // 用户第一次保存自己的内容时会整体清掉，避免假记录污染真实数据。
+    state.isDemo = true;
+  }
+
+  function seedDemoIfEmpty() {
+    if (Object.keys(state.entries).length > 0) return false;
+    var forced = new URLSearchParams(window.location.search).get('demo') === '1';
+    seedDemo();
+    if (forced) {
       setTimeout(function () {
-        toast('已载入 ' + count + ' 天示例数据');
+        toast('已载入 ' + Object.keys(state.entries).length + ' 天示例数据');
       }, 350);
     }
+    return true;
+  }
+
+  /* ---------- 顶部横幅与次日闭环 ---------- */
+
+  function readIgnoreNextDate() {
+    try {
+      return localStorage.getItem(IGNORE_NEXT_KEY);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeIgnoreNextDate(key) {
+    try {
+      localStorage.setItem(IGNORE_NEXT_KEY, key);
+    } catch (error) {
+      /* 存储不可用时忽略：卡片当天不再出现即可，不阻塞使用 */
+    }
+  }
+
+  // 昨天写了「明天第一步」、今天还没记录，且今天没点过「不做这个」
+  function computePendingNextStep() {
+    if (state.isDemo) return null;
+    var tk = todayKey();
+    if (state.entries[tk]) return null;
+    if (readIgnoreNextDate() === tk) return null;
+    var yKey = dateKey(addDays(new Date(), -1));
+    var yesterday = state.entries[yKey];
+    if (yesterday && yesterday.next && yesterday.next.text) return yesterday.next.text;
+    return null;
+  }
+
+  function renderTopBanners() {
+    if (els.demoBanner) {
+      els.demoBanner.hidden = !state.isDemo;
+    }
+    if (els.nextCard) {
+      var next = nextStepDismissed ? null : computePendingNextStep();
+      if (next) {
+        if (els.nextCardContent) els.nextCardContent.textContent = next;
+        els.nextCard.hidden = false;
+      } else {
+        els.nextCard.hidden = true;
+      }
+    }
+  }
+
+  function clearDemoAndStart() {
+    state.entries = {};
+    state.isDemo = false;
+    nextStepDismissed = false;
+    isEditingToday = false;
+    persist();
+    renderAll();
+    startWriting();
+  }
+
+  function applyNextStepToToday() {
+    var text = computePendingNextStep();
+    if (!text) return;
+    // 今天没有记录，表单本来就是可写状态；保险起见同步一次
+    isEditingToday = false;
+    renderCompose();
+    els.progress.value = text;
+    nextStepDismissed = true;
+    renderTopBanners();
+    if (els.compose) {
+      els.compose.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    try {
+      els.progress.focus({ preventScroll: true });
+    } catch (error) {
+      els.progress.focus();
+    }
+  }
+
+  function skipNextStepToday() {
+    writeIgnoreNextDate(todayKey());
+    nextStepDismissed = true;
+    renderTopBanners();
+  }
+
+  function closeNextStepCard() {
+    nextStepDismissed = true;
+    renderTopBanners();
   }
 
   /* ---------- 提示 ---------- */
@@ -969,6 +1128,13 @@
     els = {
       shell: document.querySelector('.shell'),
       storageWarn: document.getElementById('storageWarn'),
+      demoBanner: document.getElementById('demoBanner'),
+      clearDemoBtn: document.getElementById('clearDemoBtn'),
+      nextCard: document.getElementById('nextCard'),
+      nextCardContent: document.getElementById('nextCardContent'),
+      nextApplyBtn: document.getElementById('nextApplyBtn'),
+      nextSkipBtn: document.getElementById('nextSkipBtn'),
+      nextCardClose: document.getElementById('nextCardClose'),
       todayDate: document.getElementById('todayDate'),
       todayWeekday: document.getElementById('todayWeekday'),
       streak: document.getElementById('streak'),
@@ -1121,6 +1287,8 @@
   }
 
   function syncFromStorage() {
+    // 示例数据是临时的、不落盘，不要用空存储把它覆盖掉
+    if (state.isDemo) return;
     var next = sanitizeEntries(readRawEntries());
     if (JSON.stringify(next) === JSON.stringify(state.entries)) return;
     state.entries = next;
@@ -1149,6 +1317,11 @@
 
     els.guideStart.addEventListener('click', startWriting);
     els.guideDemo.addEventListener('click', loadDemoAndReload);
+
+    if (els.clearDemoBtn) els.clearDemoBtn.addEventListener('click', clearDemoAndStart);
+    if (els.nextApplyBtn) els.nextApplyBtn.addEventListener('click', applyNextStepToToday);
+    if (els.nextSkipBtn) els.nextSkipBtn.addEventListener('click', skipNextStepToday);
+    if (els.nextCardClose) els.nextCardClose.addEventListener('click', closeNextStepCard);
 
     els.reportModal.addEventListener('click', function (event) {
       var target = event.target;
@@ -1183,7 +1356,7 @@
     bindEvents();
     applyModKey();
     setupViewportOffset();
-    handleDemo();
+    seedDemoIfEmpty();
     renderAll();
   }
 

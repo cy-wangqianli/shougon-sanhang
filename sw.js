@@ -4,7 +4,7 @@
  * 缓存范围：index.html / styles.css / app.js / manifest.webmanifest / 三个图标
  */
 
-var CACHE_VERSION = 'v2-2026-11-22';
+var CACHE_VERSION = 'v3-2026-11-22';
 var CACHE_NAME = 'shougon-sanhang-' + CACHE_VERSION;
 var ASSETS = [
   './index.html',
