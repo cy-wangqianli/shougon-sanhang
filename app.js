@@ -18,6 +18,8 @@
   var pendingDelete = null;
   var collapsedWeeks = new Set();
   var currentReport = '';
+  var currentReportFile = '周报.md';
+  var reportRange = 'this';
   var toastTimer = null;
   var lastFocused = null;
 
@@ -145,6 +147,42 @@
     return count;
   }
 
+  function computeLongestStreak() {
+    var keys = Object.keys(state.entries).filter(function (key) {
+      return DATE_RE.test(key);
+    }).sort();
+
+    var best = 0;
+    var run = 0;
+    var previous = null;
+
+    keys.forEach(function (key) {
+      if (previous && dateKey(addDays(parseDateKey(previous), 1)) === key) {
+        run += 1;
+      } else {
+        run = 1;
+      }
+      if (run > best) best = run;
+      previous = key;
+    });
+
+    return best;
+  }
+
+  function computeMonthStats() {
+    var now = new Date();
+    var year = now.getFullYear();
+    var month = now.getMonth();
+    var total = new Date(year, month + 1, 0).getDate();
+    var count = 0;
+
+    for (var day = 1; day <= total; day += 1) {
+      if (state.entries[dateKey(new Date(year, month, day))]) count += 1;
+    }
+
+    return { count: count, total: total, longest: computeLongestStreak() };
+  }
+
   /* ---------- 渲染：头部与今日 ---------- */
 
   function renderHeader() {
@@ -155,6 +193,9 @@
     var streak = computeStreak();
     els.streakText.textContent = '连续打卡 ' + streak + ' 天';
     els.streak.classList.toggle('is-zero', streak === 0);
+
+    var stats = computeMonthStats();
+    els.statsText.textContent = '本月 ' + stats.count + '/' + stats.total + ' 天 · 最长连续 ' + stats.longest + ' 天';
   }
 
   function el(tagName, className, text) {
@@ -328,13 +369,8 @@
 
   function buildEmptyState() {
     var box = el('div', 'empty paper');
-    box.appendChild(el('p', 'empty-title', '还没有写下一行'));
-    box.appendChild(el('p', 'empty-text', '今晚从最简单的一句开始：今天推进了什么？哪怕只是「把需求读完了」。'));
-    var hint = el('p', 'empty-hint');
-    hint.appendChild(document.createTextNode('想先看看成品？在网址后加上 '));
-    hint.appendChild(el('code', '', '?demo=1'));
-    hint.appendChild(document.createTextNode(' 回车，会载入两周示例记录。'));
-    box.appendChild(hint);
+    box.appendChild(el('p', 'empty-title', '还没有记录'));
+    box.appendChild(el('p', 'empty-text', '写下今天的三行，这里会按周排好。'));
     return box;
   }
 
@@ -376,6 +412,7 @@
     renderHeader();
     renderCompose();
     renderTimeline();
+    els.guideCard.hidden = Object.keys(state.entries).length > 0;
   }
 
   /* ---------- 交互 ---------- */
@@ -478,9 +515,12 @@
 
   /* ---------- 周报 ---------- */
 
-  function buildWeeklyReport() {
-    var now = new Date();
-    var weekStart = startOfWeek(now);
+  function weekStartFor(range) {
+    var start = startOfWeek(new Date());
+    return range === 'last' ? addDays(start, -7) : start;
+  }
+
+  function collectWeekDays(weekStart) {
     var days = [];
 
     for (var i = 0; i < 7; i += 1) {
@@ -491,6 +531,11 @@
       }
     }
 
+    return days;
+  }
+
+  function buildWeeklyReport(weekStart, label) {
+    var days = collectWeekDays(weekStart);
     if (!days.length) return '';
 
     var weekEnd = addDays(weekStart, 6);
@@ -498,7 +543,7 @@
 
     out.push('# 收工三行 · 周报');
     out.push('');
-    out.push(fullDate(weekStart) + ' – ' + shortDate(weekEnd) + ' ｜ 本周记录 ' + days.length + ' 天');
+    out.push(fullDate(weekStart) + ' – ' + shortDate(weekEnd) + ' ｜ ' + label + '记录 ' + days.length + ' 天');
     out.push('');
 
     days.forEach(function (item) {
@@ -517,7 +562,7 @@
       return item.entry.blocker && item.entry.blocker.text;
     });
 
-    out.push('## 本周卡点');
+    out.push('## ' + label + '卡点');
     out.push('');
     if (blockers.length) {
       blockers.forEach(function (item) {
@@ -525,7 +570,7 @@
         out.push('- **' + shortDate(item.date) + '**：' + item.entry.blocker.text + tag);
       });
     } else {
-      out.push('- 本周没有记录卡点。');
+      out.push('- ' + label + '没有记录卡点。');
     }
     out.push('');
     out.push('---');
@@ -535,21 +580,66 @@
     return out.join('\n');
   }
 
-  function openReport() {
-    var report = buildWeeklyReport();
+  function renderReport() {
+    var weekStart = weekStartFor(reportRange);
+    var label = reportRange === 'last' ? '上周' : '本周';
+    var report = buildWeeklyReport(weekStart, label);
+
+    currentReport = report;
+    currentReportFile = '周报-' + dateKey(weekStart) + '.md';
+    els.reportTitle.textContent = label + '周报';
+
+    Array.prototype.forEach.call(els.reportRange.querySelectorAll('[data-range]'), function (button) {
+      var active = button.dataset.range === reportRange;
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+      button.tabIndex = active ? 0 : -1;
+    });
+
     if (!report) {
-      toast('本周还没有记录，先写下今天的三行吧');
+      els.reportText.hidden = true;
+      els.reportText.textContent = '';
+      els.reportEmpty.hidden = false;
+      els.reportEmpty.textContent = reportRange === 'last'
+        ? '上周没有记录，本周可以重新攒起来。'
+        : '本周还没有记录，先写下今天的三行吧。';
+      els.copyBtn.disabled = true;
+      els.downloadBtn.disabled = true;
       return;
     }
 
-    currentReport = report;
+    els.reportEmpty.hidden = true;
+    els.reportText.hidden = false;
     els.reportText.textContent = report;
+    els.copyBtn.disabled = false;
+    els.downloadBtn.disabled = false;
     els.copyBtn.textContent = '复制到剪贴板';
-    lastFocused = document.activeElement;
+  }
 
+  function openReport() {
+    reportRange = 'this';
+    renderReport();
+
+    lastFocused = document.activeElement;
     els.reportModal.hidden = false;
     document.body.classList.add('modal-open');
     els.modalPanel.focus();
+  }
+
+  function downloadReport() {
+    if (!currentReport) return;
+
+    var blob = new Blob([currentReport], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = currentReportFile;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+    toast('周报已下载');
   }
 
   function closeReport() {
@@ -815,6 +905,11 @@
       todayWeekday: document.getElementById('todayWeekday'),
       streak: document.getElementById('streak'),
       streakText: document.getElementById('streakText'),
+      statsText: document.getElementById('statsText'),
+      guideCard: document.getElementById('guideCard'),
+      guideStart: document.getElementById('guideStart'),
+      guideDemo: document.getElementById('guideDemo'),
+      compose: document.querySelector('.compose'),
       composeHint: document.getElementById('composeHint'),
       entryForm: document.getElementById('entryForm'),
       todaySaved: document.getElementById('todaySaved'),
@@ -836,8 +931,12 @@
       timelineList: document.getElementById('timelineList'),
       timelineMeta: document.getElementById('timelineMeta'),
       reportModal: document.getElementById('reportModal'),
+      reportTitle: document.getElementById('reportTitle'),
       reportText: document.getElementById('reportText'),
+      reportRange: document.getElementById('reportRange'),
+      reportEmpty: document.getElementById('reportEmpty'),
       copyBtn: document.getElementById('copyBtn'),
+      downloadBtn: document.getElementById('downloadBtn'),
       toast: document.getElementById('toast')
     };
     els.modalPanel = els.reportModal.querySelector('.modal-panel');
@@ -866,6 +965,52 @@
     }
   }
 
+  function startWriting() {
+    if (els.compose) {
+      els.compose.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    try {
+      els.progress.focus({ preventScroll: true });
+    } catch (error) {
+      els.progress.focus();
+    }
+  }
+
+  function loadDemoAndReload() {
+    var url = new URL(window.location.href);
+    url.searchParams.set('demo', '1');
+    window.location.href = url.href;
+  }
+
+  function handleRangeClick(event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+
+    var button = target.closest('[data-range]');
+    if (!button) return;
+
+    var range = button.dataset.range === 'last' ? 'last' : 'this';
+    if (range === reportRange) return;
+
+    reportRange = range;
+    renderReport();
+  }
+
+  function setupViewportOffset() {
+    var viewport = window.visualViewport;
+    if (!viewport) return;
+
+    function sync() {
+      var offset = Math.round(window.innerHeight - viewport.height - viewport.offsetTop);
+      if (!isFinite(offset) || offset < 0) offset = 0;
+      document.documentElement.style.setProperty('--kb-offset', offset + 'px');
+    }
+
+    viewport.addEventListener('resize', sync);
+    viewport.addEventListener('scroll', sync);
+    sync();
+  }
+
   function bindEvents() {
     els.entryForm.addEventListener('submit', handleSubmit);
     els.entryForm.addEventListener('input', hideFormError);
@@ -882,6 +1027,11 @@
 
     els.reportBtn.addEventListener('click', openReport);
     els.copyBtn.addEventListener('click', handleCopy);
+    els.downloadBtn.addEventListener('click', downloadReport);
+    els.reportRange.addEventListener('click', handleRangeClick);
+
+    els.guideStart.addEventListener('click', startWriting);
+    els.guideDemo.addEventListener('click', loadDemoAndReload);
 
     els.reportModal.addEventListener('click', function (event) {
       var target = event.target;
@@ -904,6 +1054,7 @@
     state.entries = sanitizeEntries(readRawEntries());
     bindEvents();
     applyModKey();
+    setupViewportOffset();
     handleDemo();
     renderAll();
   }
