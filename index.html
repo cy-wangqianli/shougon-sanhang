@@ -21,6 +21,11 @@
     <p class="storage-warn" id="storageWarn" role="alert" hidden>这次没写进本机存储，请立刻导出备份。</p>
 
     <div class="top-banners" id="topBanners">
+      <div class="onboard-bar" id="onboardBar" hidden role="status">
+        <p class="onboard-text">① 写三行 → ② <span class="onboard-key" id="onboardKbd">Ctrl+Enter</span> 收工 → ③ 周末一键出周报</p>
+        <button class="icon-btn" id="onboardClose" type="button" aria-label="关闭引导">×</button>
+      </div>
+
       <div class="demo-banner" id="demoBanner" hidden role="status">
         <p class="demo-banner-text">这是示例数据 · 点这里开始记录你自己的</p>
         <button class="btn small" id="clearDemoBtn" type="button">清空示例，开始写</button>
@@ -110,6 +115,17 @@
                 <option value="其他">其他</option>
               </select>
             </div>
+            <div class="fix-wrap">
+              <button class="fix-toggle" id="fixToggle" type="button" aria-expanded="false" aria-controls="fixArea">＋ 记下解法</button>
+              <div class="fix-suggest" id="fixSuggest" hidden>
+                <p class="fix-suggest-text" id="fixSuggestText"></p>
+                <button class="btn tiny" id="fixSuggestApply" type="button">引用这条解法</button>
+              </div>
+              <div class="fix-area" id="fixArea" hidden>
+                <label class="fix-label" for="fix">这次的解法 / 下次怎么做</label>
+                <textarea id="fix" name="fix" rows="2" maxlength="200" placeholder="例：导出时把 devicePixelRatio 乘回去，白边就没了"></textarea>
+              </div>
+            </div>
           </div>
 
           <div class="field">
@@ -141,7 +157,10 @@
         <div class="today-saved" id="todaySaved" hidden>
           <div class="saved-head">
             <span class="stamp">已收工</span>
-            <button class="btn ghost small" id="editTodayBtn" type="button">编辑今日三行</button>
+            <div class="saved-actions">
+              <button class="btn ghost small" id="fixAfterBtn" type="button" hidden>补记解法</button>
+              <button class="btn ghost small" id="editTodayBtn" type="button">编辑今日三行</button>
+            </div>
           </div>
           <div class="entry-lines" id="todaySavedLines"></div>
         </div>
@@ -189,7 +208,28 @@
       <div class="modal-actions">
         <button class="btn primary" id="copyBtn" type="button">复制到剪贴板</button>
         <button class="btn ghost" id="downloadBtn" type="button">下载 .md</button>
+        <button class="btn ghost" id="shareBtn" type="button">生成分享图</button>
         <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="shareModal" hidden>
+    <div class="modal-backdrop" data-share-close></div>
+    <div class="modal-panel share-panel" role="dialog" aria-modal="true" aria-labelledby="shareTitle" tabindex="-1">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">PNG · 1080 × 1350</p>
+          <h2 id="shareTitle">分享图预览</h2>
+        </div>
+        <button class="icon-btn" type="button" data-share-close aria-label="关闭">×</button>
+      </div>
+      <div class="share-preview">
+        <img id="shareImage" alt="本周周报分享图预览">
+      </div>
+      <div class="modal-actions">
+        <button class="btn primary" id="shareDownloadBtn" type="button">下载 PNG</button>
+        <button class="btn ghost" type="button" data-share-close>关闭</button>
       </div>
     </div>
   </div>

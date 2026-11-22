@@ -3,6 +3,7 @@
 
   var STORAGE_KEY = 'shougon-sanhang.v1';
   var IGNORE_NEXT_KEY = STORAGE_KEY + '.ignoreNext';
+  var GUIDE_SEEN_KEY = STORAGE_KEY + '.guideSeen';
   var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   var TAGS = ['比赛', '学习', '生活', '其他'];
   var TAG_CLASS = { 比赛: 'tag-match', 学习: 'tag-study', 生活: 'tag-life', 其他: 'tag-other' };
@@ -24,6 +25,12 @@
   var toastTimer = null;
   var lastFocused = null;
   var nextStepDismissed = false;
+  var suggestedFix = null;
+  var fixSuggestTimer = null;
+  var onboardingState = 'unset';
+  var currentShareImage = '';
+  var currentShareFile = '收工三行-周报.png';
+  var shareReturnFocus = null;
 
   /* ---------- 日期 ---------- */
 
@@ -111,6 +118,11 @@
         next: readLine(day.next),
         updatedAt: typeof day.updatedAt === 'string' ? day.updatedAt : null
       };
+      // fix 是后加的可选字段：旧数据没有也能直接读，只有非空时才保留
+      if (day.blocker && typeof day.blocker === 'object') {
+        var fix = cleanText(day.blocker.fix);
+        if (fix) entry.blocker.fix = fix;
+      }
       if (entry.progress.text || entry.blocker.text || entry.next.text) {
         out[key] = entry;
       } else if (stats) {
@@ -261,6 +273,9 @@
     if (line.tag) {
       text.appendChild(el('span', 'tag ' + (TAG_CLASS[line.tag] || 'tag-other'), line.tag));
     }
+    if (field.key === 'blocker' && line.fix) {
+      text.appendChild(el('span', 'line-fix', '解法：' + line.fix));
+    }
     row.appendChild(text);
     return row;
   }
@@ -282,6 +297,7 @@
     els.entryForm.hidden = showSaved;
     els.todaySaved.hidden = !showSaved;
     els.saveLabel.textContent = entry ? '更新今日三行' : '保存今日三行';
+    els.fixAfterBtn.hidden = !(entry && entry.blocker && entry.blocker.text);
 
     if (showSaved) {
       els.composeHint.textContent = '今天已收工，想修改就点编辑。';
@@ -293,6 +309,12 @@
     }
   }
 
+  function setFixExpanded(expanded) {
+    els.fixArea.hidden = !expanded;
+    els.fixToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    els.fixToggle.textContent = expanded ? '收起解法' : '＋ 记下解法';
+  }
+
   function fillForm(entry) {
     FIELDS.forEach(function (field) {
       var line = entry ? entry[field.key] : null;
@@ -300,11 +322,122 @@
       var tagSelect = els[field.key + 'Tag'];
       tagSelect.value = line && line.tag ? line.tag : '';
     });
+    var fix = entry && entry.blocker && entry.blocker.fix ? entry.blocker.fix : '';
+    els.fix.value = fix;
+    setFixExpanded(Boolean(fix));
     hideFormError();
   }
 
   function clearForm() {
     fillForm(null);
+  }
+
+  /* ---------- 卡点解法库 ---------- */
+
+  // 归一化成可比较的词：英文/数字按词，中文按二元组；标点与空白直接丢掉
+  function tokenizeForMatch(text) {
+    var lower = String(text || '').toLowerCase();
+    var tokens = [];
+    var words = lower.match(/[a-z0-9]{2,}/g);
+    if (words) tokens = tokens.concat(words);
+    var runs = lower.match(/[\u4e00-\u9fff]+/g) || [];
+    runs.forEach(function (run) {
+      if (run.length === 1) {
+        tokens.push(run);
+        return;
+      }
+      for (var i = 0; i < run.length - 1; i += 1) {
+        tokens.push(run.slice(i, i + 2));
+      }
+    });
+    return tokens;
+  }
+
+  function matchScore(aTokens, bTokens) {
+    if (!aTokens.length || !bTokens.length) return 0;
+    var pool = Object.create(null);
+    aTokens.forEach(function (token) {
+      pool[token] = true;
+    });
+    var shared = 0;
+    var seen = Object.create(null);
+    bTokens.forEach(function (token) {
+      if (pool[token] && !seen[token]) {
+        seen[token] = true;
+        shared += 1;
+      }
+    });
+    return shared / Math.min(aTokens.length, bTokens.length);
+  }
+
+  // 最近 30 条带解法的历史卡点（今天的除外）
+  function collectFixHistory() {
+    var today = todayKey();
+    var out = [];
+    Object.keys(state.entries).filter(function (key) {
+      return DATE_RE.test(key) && key !== today;
+    }).sort().reverse().forEach(function (key) {
+      if (out.length >= 30) return;
+      var blocker = state.entries[key].blocker;
+      if (blocker && blocker.text && blocker.fix) {
+        out.push({ key: key, text: blocker.text, fix: blocker.fix });
+      }
+    });
+    return out;
+  }
+
+  function findSimilarFix(text) {
+    var tokens = tokenizeForMatch(text);
+    if (!tokens.length) return null;
+    if (tokens.length === 1 && tokens[0].length < 2) return null;
+
+    var best = null;
+    collectFixHistory().forEach(function (item) {
+      var score = matchScore(tokens, tokenizeForMatch(item.text));
+      if (score >= 0.5 && (!best || score > best.score)) {
+        best = { item: item, score: score };
+      }
+    });
+    return best ? best.item : null;
+  }
+
+  function hideFixSuggestion() {
+    suggestedFix = null;
+    if (!els.fixSuggest) return;
+    els.fixSuggest.hidden = true;
+    els.fixSuggestText.textContent = '';
+  }
+
+  function updateFixSuggestion() {
+    var text = cleanText(els.blocker.value);
+    if (!text) {
+      hideFixSuggestion();
+      return;
+    }
+
+    var match = findSimilarFix(text);
+    if (!match || cleanText(els.fix.value) === match.fix) {
+      hideFixSuggestion();
+      return;
+    }
+
+    suggestedFix = match;
+    els.fixSuggestText.textContent = '上次你卡在类似问题：' + match.text + ' → ' + match.fix;
+    els.fixSuggest.hidden = false;
+  }
+
+  function applySuggestedFix() {
+    if (!suggestedFix) return;
+    els.fix.value = suggestedFix.fix;
+    setFixExpanded(true);
+    hideFixSuggestion();
+    els.fix.focus();
+    toast('已引用上次的解法');
+  }
+
+  function scheduleFixSuggestion() {
+    if (fixSuggestTimer) clearTimeout(fixSuggestTimer);
+    fixSuggestTimer = setTimeout(updateFixSuggestion, 180);
   }
 
   /* ---------- 渲染：时间轴 ---------- */
@@ -462,6 +595,7 @@
     renderCompose();
     renderTimeline();
     renderTopBanners();
+    renderOnboarding();
     els.guideCard.hidden = Object.keys(state.entries).length > 0;
   }
 
@@ -499,6 +633,12 @@
       if (text) hasAny = true;
     });
 
+    // 解法是可选字段：卡点为空就不保留，有内容才写进 blocker.fix
+    var fixText = entry.blocker.text ? cleanText(els.fix.value) : '';
+    if (fixText) entry.blocker.fix = fixText;
+    els.fix.value = fixText;
+    hideFixSuggestion();
+
     if (!hasAny) {
       showFormError('至少写一行再收工，哪怕只有半句。');
       els.progress.focus();
@@ -511,6 +651,7 @@
     isEditingToday = false;
     renderAll();
     if (saved) {
+      popStamp();
       toast('已保存 · 连续打卡 ' + computeStreak() + ' 天');
       els.editTodayBtn.focus();
     }
@@ -622,14 +763,22 @@
     return '其他';
   }
 
+  function formatReportRange(weekStart) {
+    var weekEnd = addDays(weekStart, 6);
+    return weekStart.getFullYear() === weekEnd.getFullYear()
+      ? fullDate(weekStart) + ' – ' + shortDate(weekEnd)
+      : fullDate(weekStart) + ' – ' + fullDate(weekEnd);
+  }
+
+  function blockerFixSuffix(line) {
+    return line && line.fix ? ' ｜ 解法：' + line.fix : '';
+  }
+
   function buildWeeklyReport(weekStart, label) {
     var days = collectWeekDays(weekStart);
     if (!days.length) return '';
 
-    var weekEnd = addDays(weekStart, 6);
-    var rangeText = weekStart.getFullYear() === weekEnd.getFullYear()
-      ? fullDate(weekStart) + ' – ' + shortDate(weekEnd)
-      : fullDate(weekStart) + ' – ' + fullDate(weekEnd);
+    var rangeText = formatReportRange(weekStart);
     var out = [];
 
     out.push('# 收工三行 · 周报');
@@ -644,7 +793,8 @@
         var line = item.entry[field.key];
         if (!line || !line.text) return;
         var tag = line.tag ? '（' + line.tag + '）' : '';
-        out.push('- **' + field.reportLabel + '**：' + line.text + tag);
+        var fix = field.key === 'blocker' ? blockerFixSuffix(line) : '';
+        out.push('- **' + field.reportLabel + '**：' + line.text + tag + fix);
       });
       out.push('');
     });
@@ -688,7 +838,7 @@
     if (blockers.length) {
       blockers.forEach(function (item) {
         var tag = item.entry.blocker.tag ? '（' + item.entry.blocker.tag + '）' : '';
-        out.push('- **' + shortDate(item.date) + '**：' + item.entry.blocker.text + tag);
+        out.push('- **' + shortDate(item.date) + '**：' + item.entry.blocker.text + tag + blockerFixSuffix(item.entry.blocker));
       });
     } else {
       out.push('- ' + label + '没有记录卡点。');
@@ -724,6 +874,7 @@
         : '本周还没有记录，先写下今天的三行吧。';
       els.copyBtn.disabled = true;
       els.downloadBtn.disabled = true;
+      els.shareBtn.disabled = true;
       return;
     }
 
@@ -732,6 +883,7 @@
     els.reportText.textContent = report;
     els.copyBtn.disabled = false;
     els.downloadBtn.disabled = false;
+    els.shareBtn.disabled = false;
     els.copyBtn.textContent = '复制到剪贴板';
   }
 
@@ -761,6 +913,233 @@
       URL.revokeObjectURL(url);
     }, 1000);
     toast('周报已下载');
+  }
+
+  /* ---------- 周报分享图 ---------- */
+
+  var SHARE_SERIF = '"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "STSong", "SimSun", Georgia, serif';
+  var SHARE_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  function buildShareData(weekStart) {
+    var days = collectWeekDays(weekStart);
+    var progress = [];
+    var counts = {};
+
+    days.forEach(function (item) {
+      var line = item.entry.progress;
+      if (line && line.text && progress.length < 3) progress.push(line.text);
+
+      var blocker = item.entry.blocker;
+      if (blocker && blocker.text) {
+        var name = classifyBlocker(blocker.text);
+        counts[name] = (counts[name] || 0) + 1;
+      }
+    });
+
+    var top = Object.keys(counts).sort(function (a, b) {
+      return counts[b] - counts[a];
+    }).slice(0, 2).map(function (name) {
+      return { name: name, count: counts[name] };
+    });
+
+    return {
+      days: days.length,
+      progress: progress,
+      top: top,
+      streak: computeStreak()
+    };
+  }
+
+  function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
+    var chars = String(text).split('');
+    var lines = [];
+    var line = '';
+    var used = 0;
+
+    for (var i = 0; i < chars.length; i += 1) {
+      var candidate = line + chars[i];
+      if (line && ctx.measureText(candidate).width > maxWidth) {
+        lines.push(line);
+        line = chars[i];
+        if (lines.length === maxLines) break;
+      } else {
+        line = candidate;
+      }
+      used = i + 1;
+    }
+
+    if (lines.length < maxLines && line) lines.push(line);
+
+    if (used < chars.length && lines.length) {
+      var last = lines[lines.length - 1];
+      while (last && ctx.measureText(last + '…').width > maxWidth) {
+        last = last.slice(0, -1);
+      }
+      lines[lines.length - 1] = last + '…';
+    }
+
+    lines.forEach(function (item, index) {
+      ctx.fillText(item, x, y + index * lineHeight);
+    });
+
+    return y + lines.length * lineHeight;
+  }
+
+  function renderShareCard() {
+    var weekStart = weekStartFor(reportRange);
+    var label = reportRange === 'last' ? '上周' : '本周';
+    var data = buildShareData(weekStart);
+    if (!data.days) return false;
+
+    var dark = false;
+    try {
+      dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch (error) {
+      dark = false;
+    }
+
+    var c = dark
+      ? { bg: '#15130f', ink: '#ece4d6', ink2: '#b4aa99', ink3: '#9a9080', line: 'rgba(236, 228, 214, 0.22)', accent: '#d97752' }
+      : { bg: '#f4efe4', ink: '#221f1a', ink2: '#5d5549', ink3: '#6b6255', line: 'rgba(54, 45, 32, 0.22)', accent: '#a34728' };
+
+    var canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1350;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+
+    var pad = 84;
+    var inner = 1080 - pad * 2;
+
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, 1080, 1350);
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(36, 36, 1008, 1278);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = c.ink3;
+    ctx.font = '500 22px ' + SHARE_SANS;
+    ctx.fillText('WEEKLY REVIEW', pad, 142);
+
+    ctx.fillStyle = c.ink;
+    ctx.font = '600 62px ' + SHARE_SERIF;
+    ctx.fillText('收工三行 · ' + label + '周报', pad, 226);
+
+    ctx.fillStyle = c.ink2;
+    ctx.font = '400 30px ' + SHARE_SANS;
+    ctx.fillText(formatReportRange(weekStart), pad, 286);
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(pad, 328);
+    ctx.lineTo(1080 - pad, 328);
+    ctx.stroke();
+
+    ctx.fillStyle = c.ink3;
+    ctx.font = '400 25px ' + SHARE_SANS;
+    ctx.fillText('本周记录', pad, 390);
+    ctx.fillText('连续打卡', pad + 440, 390);
+
+    ctx.fillStyle = c.ink;
+    ctx.font = '600 74px ' + SHARE_SERIF;
+    ctx.fillText(data.days + ' 天', pad, 470);
+    ctx.fillText(data.streak + ' 天', pad + 440, 470);
+
+    ctx.strokeStyle = c.line;
+    ctx.beginPath();
+    ctx.moveTo(pad, 514);
+    ctx.lineTo(1080 - pad, 514);
+    ctx.stroke();
+
+    var y = 596;
+    ctx.fillStyle = c.accent;
+    ctx.font = '600 28px ' + SHARE_SANS;
+    ctx.fillText('本周推进', pad, y);
+
+    ctx.font = '400 36px ' + SHARE_SANS;
+    y += 62;
+    if (data.progress.length) {
+      data.progress.forEach(function (text) {
+        ctx.fillStyle = c.accent;
+        ctx.fillText('·', pad, y);
+        ctx.fillStyle = c.ink;
+        y = drawWrappedText(ctx, text, pad + 30, y, inner - 30, 50, 2);
+        y += 20;
+      });
+    } else {
+      ctx.fillStyle = c.ink3;
+      ctx.fillText('这周还没有记录推进。', pad, y);
+      y += 56;
+    }
+
+    var blockerY = Math.max(y + 44, 980);
+    ctx.fillStyle = c.accent;
+    ctx.font = '600 28px ' + SHARE_SANS;
+    ctx.fillText('卡点 Top 2', pad, blockerY);
+
+    ctx.font = '400 36px ' + SHARE_SANS;
+    blockerY += 58;
+    if (data.top.length) {
+      data.top.forEach(function (item, index) {
+        ctx.fillStyle = c.accent;
+        ctx.fillText('0' + (index + 1), pad, blockerY);
+        ctx.fillStyle = c.ink;
+        ctx.fillText(item.name + ' · ' + item.count + ' 次', pad + 66, blockerY);
+        blockerY += 54;
+      });
+    } else {
+      ctx.fillStyle = c.ink3;
+      ctx.fillText('本周没有记录卡点。', pad, blockerY);
+    }
+
+    ctx.fillStyle = c.ink3;
+    ctx.font = '400 28px ' + SHARE_SANS;
+    ctx.fillText('每天三行，周末自动变周报', pad, 1268);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = c.accent;
+    ctx.font = '500 26px ' + SHARE_SERIF;
+    ctx.fillText('收工三行', 1080 - pad, 1268);
+    ctx.textAlign = 'left';
+
+    currentShareImage = canvas.toDataURL('image/png');
+    currentShareFile = '收工三行-周报-' + dateKey(weekStart) + '.png';
+    return true;
+  }
+
+  function openSharePreview() {
+    if (!renderShareCard()) {
+      toast('这周还没有记录，先写几行再生成分享图');
+      return;
+    }
+    els.shareImage.src = currentShareImage;
+    shareReturnFocus = document.activeElement;
+    els.shareModal.hidden = false;
+    els.sharePanel.focus();
+  }
+
+  function closeSharePreview() {
+    if (els.shareModal.hidden) return;
+    els.shareModal.hidden = true;
+    els.shareImage.removeAttribute('src');
+    if (shareReturnFocus && typeof shareReturnFocus.focus === 'function' && document.contains(shareReturnFocus)) {
+      shareReturnFocus.focus();
+    }
+  }
+
+  function downloadShareImage() {
+    if (!currentShareImage) return;
+    var link = document.createElement('a');
+    link.href = currentShareImage;
+    link.download = currentShareFile;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast('分享图已下载');
   }
 
   function closeReport() {
@@ -1110,7 +1489,61 @@
     renderTopBanners();
   }
 
+  /* ---------- 首次三步引导 ---------- */
+
+  function readGuideSeen() {
+    try {
+      return localStorage.getItem(GUIDE_SEEN_KEY) === '1';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function markGuideSeen() {
+    try {
+      localStorage.setItem(GUIDE_SEEN_KEY, '1');
+    } catch (error) {
+      /* 存储不可用时退化为每次访问都显示，不影响主流程 */
+    }
+  }
+
+  function shouldShowOnboarding() {
+    if (readGuideSeen()) return false;
+    // 主动看示例（?demo=1）时不打扰
+    if (new URLSearchParams(window.location.search).get('demo') === '1') return false;
+    return state.isDemo || Object.keys(state.entries).length === 0;
+  }
+
+  function renderOnboarding() {
+    if (!els.onboardBar) return;
+    if (onboardingState === 'closed') {
+      els.onboardBar.hidden = true;
+      return;
+    }
+    if (onboardingState !== 'open') {
+      if (!shouldShowOnboarding()) {
+        els.onboardBar.hidden = true;
+        return;
+      }
+      onboardingState = 'open';
+      markGuideSeen();
+    }
+    els.onboardBar.hidden = false;
+  }
+
+  function closeOnboarding() {
+    onboardingState = 'closed';
+    if (els.onboardBar) els.onboardBar.hidden = true;
+  }
+
   /* ---------- 提示 ---------- */
+
+  function popStamp() {
+    if (!els.stamp) return;
+    els.stamp.classList.remove('pop');
+    void els.stamp.offsetWidth;
+    els.stamp.classList.add('pop');
+  }
 
   function toast(message) {
     if (!els.toast) return;
@@ -1135,6 +1568,9 @@
       nextApplyBtn: document.getElementById('nextApplyBtn'),
       nextSkipBtn: document.getElementById('nextSkipBtn'),
       nextCardClose: document.getElementById('nextCardClose'),
+      onboardBar: document.getElementById('onboardBar'),
+      onboardClose: document.getElementById('onboardClose'),
+      onboardKbd: document.getElementById('onboardKbd'),
       todayDate: document.getElementById('todayDate'),
       todayWeekday: document.getElementById('todayWeekday'),
       streak: document.getElementById('streak'),
@@ -1148,11 +1584,19 @@
       entryForm: document.getElementById('entryForm'),
       todaySaved: document.getElementById('todaySaved'),
       todaySavedLines: document.getElementById('todaySavedLines'),
+      stamp: document.querySelector('.stamp'),
+      fixAfterBtn: document.getElementById('fixAfterBtn'),
       editTodayBtn: document.getElementById('editTodayBtn'),
       progress: document.getElementById('progress'),
       progressTag: document.getElementById('progressTag'),
       blocker: document.getElementById('blocker'),
       blockerTag: document.getElementById('blockerTag'),
+      fixToggle: document.getElementById('fixToggle'),
+      fixArea: document.getElementById('fixArea'),
+      fix: document.getElementById('fix'),
+      fixSuggest: document.getElementById('fixSuggest'),
+      fixSuggestText: document.getElementById('fixSuggestText'),
+      fixSuggestApply: document.getElementById('fixSuggestApply'),
       next: document.getElementById('next'),
       nextTag: document.getElementById('nextTag'),
       formError: document.getElementById('formError'),
@@ -1171,22 +1615,29 @@
       reportEmpty: document.getElementById('reportEmpty'),
       copyBtn: document.getElementById('copyBtn'),
       downloadBtn: document.getElementById('downloadBtn'),
+      shareBtn: document.getElementById('shareBtn'),
+      shareModal: document.getElementById('shareModal'),
+      shareImage: document.getElementById('shareImage'),
+      shareDownloadBtn: document.getElementById('shareDownloadBtn'),
       toast: document.getElementById('toast')
     };
     els.modalPanel = els.reportModal.querySelector('.modal-panel');
+    els.sharePanel = els.shareModal.querySelector('.modal-panel');
   }
 
   function applyModKey() {
     var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
-    els.saveKbd.textContent = isMac ? '⌘+Enter' : 'Ctrl+Enter';
+    var label = isMac ? '⌘+Enter' : 'Ctrl+Enter';
+    els.saveKbd.textContent = label;
+    if (els.onboardKbd) els.onboardKbd.textContent = label;
   }
 
   var FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), ' +
     'input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  function trapModalFocus(event) {
+  function trapModalFocus(event, panel) {
     var nodes = Array.prototype.filter.call(
-      els.modalPanel.querySelectorAll(FOCUSABLE),
+      panel.querySelectorAll(FOCUSABLE),
       function (node) {
         return node.offsetParent !== null;
       }
@@ -1198,18 +1649,28 @@
     var active = document.activeElement;
 
     if (event.shiftKey) {
-      if (active === first || !els.modalPanel.contains(active)) {
+      if (active === first || !panel.contains(active)) {
         event.preventDefault();
         last.focus();
       }
-    } else if (active === last || !els.modalPanel.contains(active)) {
+    } else if (active === last || !panel.contains(active)) {
       event.preventDefault();
       first.focus();
     }
   }
 
+  function activeModalPanel() {
+    if (els.shareModal && !els.shareModal.hidden) return els.sharePanel;
+    if (els.reportModal && !els.reportModal.hidden) return els.modalPanel;
+    return null;
+  }
+
   function handleKeydown(event) {
     if (event.key === 'Escape') {
+      if (els.shareModal && !els.shareModal.hidden) {
+        closeSharePreview();
+        return;
+      }
       if (!els.reportModal.hidden) {
         closeReport();
         return;
@@ -1223,9 +1684,12 @@
       }
     }
 
-    if (event.key === 'Tab' && !els.reportModal.hidden) {
-      trapModalFocus(event);
-      return;
+    if (event.key === 'Tab') {
+      var panel = activeModalPanel();
+      if (panel) {
+        trapModalFocus(event, panel);
+        return;
+      }
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -1308,16 +1772,35 @@
       els.progress.focus();
     });
 
+    els.fixAfterBtn.addEventListener('click', function () {
+      var entry = state.entries[todayKey()];
+      if (!entry) return;
+      isEditingToday = true;
+      fillForm(entry);
+      renderCompose();
+      setFixExpanded(true);
+      els.fix.focus();
+    });
+
+    els.fixToggle.addEventListener('click', function () {
+      setFixExpanded(els.fixArea.hidden);
+    });
+    els.blocker.addEventListener('input', scheduleFixSuggestion);
+    els.fixSuggestApply.addEventListener('click', applySuggestedFix);
+
     els.timelineList.addEventListener('click', handleTimelineClick);
 
     els.reportBtn.addEventListener('click', openReport);
     els.copyBtn.addEventListener('click', handleCopy);
     els.downloadBtn.addEventListener('click', downloadReport);
+    els.shareBtn.addEventListener('click', openSharePreview);
+    els.shareDownloadBtn.addEventListener('click', downloadShareImage);
     els.reportRange.addEventListener('click', handleRangeClick);
 
     els.guideStart.addEventListener('click', startWriting);
     els.guideDemo.addEventListener('click', loadDemoAndReload);
 
+    if (els.onboardClose) els.onboardClose.addEventListener('click', closeOnboarding);
     if (els.clearDemoBtn) els.clearDemoBtn.addEventListener('click', clearDemoAndStart);
     if (els.nextApplyBtn) els.nextApplyBtn.addEventListener('click', applyNextStepToToday);
     if (els.nextSkipBtn) els.nextSkipBtn.addEventListener('click', skipNextStepToday);
@@ -1327,6 +1810,13 @@
       var target = event.target;
       if (target instanceof Element && target.hasAttribute('data-close')) {
         closeReport();
+      }
+    });
+
+    els.shareModal.addEventListener('click', function (event) {
+      var target = event.target;
+      if (target instanceof Element && target.hasAttribute('data-share-close')) {
+        closeSharePreview();
       }
     });
 
