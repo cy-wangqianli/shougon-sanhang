@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>收工三行 · 30 秒收工复盘</title>
+  <meta name="description" content="每晚只写三行：今天推进了什么、卡在哪、明天第一步。自动聚合成周报。">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15130f" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f4efe4'/%3E%3Cpath d='M16 22h32M16 32h32M16 42h20' stroke='%23221f1a' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div class="brand-row">
+        <span class="brand">收工三行</span>
+        <span class="brand-note">30 秒收工复盘</span>
+      </div>
+      <h1 class="today">
+        <span id="todayDate">今天</span>
+        <span class="weekday" id="todayWeekday"></span>
+      </h1>
+      <div class="masthead-meta">
+        <p class="streak is-zero" id="streak">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="streakText">连续打卡 0 天</span>
+        </p>
+        <p class="tagline">每天三行，攒着攒着就成了周报。</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="compose paper" aria-labelledby="composeTitle">
+        <div class="compose-head">
+          <h2 id="composeTitle">今天的收工三行</h2>
+          <p class="compose-hint" id="composeHint">写完三行就算收工，不追求完美。</p>
+        </div>
+
+        <form id="entryForm" novalidate autocomplete="off">
+          <div class="field">
+            <label class="field-label" for="progress">
+              <span class="field-index">01</span>
+              <span>今天推进了什么</span>
+            </label>
+            <div class="field-input">
+              <textarea id="progress" name="progress" rows="2" maxlength="200" placeholder="例：把周报页的骨架搭完，能跑通一条数据"></textarea>
+              <select id="progressTag" aria-label="给今天推进的事选一个标签">
+                <option value="">无标签</option>
+                <option value="比赛">比赛</option>
+                <option value="学习">学习</option>
+                <option value="生活">生活</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="blocker">
+              <span class="field-index">02</span>
+              <span>今天卡在哪</span>
+            </label>
+            <div class="field-input">
+              <textarea id="blocker" name="blocker" rows="2" maxlength="200" placeholder="例：深色模式下按钮对比度不够，还没找到原因"></textarea>
+              <select id="blockerTag" aria-label="给今天的卡点选一个标签">
+                <option value="">无标签</option>
+                <option value="比赛">比赛</option>
+                <option value="学习">学习</option>
+                <option value="生活">生活</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="next">
+              <span class="field-index">03</span>
+              <span>明天第一步做什么</span>
+            </label>
+            <div class="field-input">
+              <textarea id="next" name="next" rows="2" maxlength="200" placeholder="例：先修对比度，再补一条空状态文案"></textarea>
+              <select id="nextTag" aria-label="给明天第一步选一个标签">
+                <option value="">无标签</option>
+                <option value="比赛">比赛</option>
+                <option value="学习">学习</option>
+                <option value="生活">生活</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-foot">
+            <p class="form-error" id="formError" role="alert" hidden></p>
+            <button class="btn primary save-btn" type="submit">
+              <span id="saveLabel">保存今日三行</span>
+              <kbd id="saveKbd">Ctrl ↵</kbd>
+            </button>
+          </div>
+        </form>
+
+        <div class="today-saved" id="todaySaved" hidden>
+          <div class="saved-head">
+            <span class="stamp">已收工</span>
+            <button class="btn ghost small" id="editTodayBtn" type="button">编辑今日三行</button>
+          </div>
+          <div class="entry-lines" id="todaySavedLines"></div>
+        </div>
+      </section>
+
+      <div class="toolbar">
+        <button class="btn accent" id="reportBtn" type="button">生成本周周报</button>
+        <div class="toolbar-rest">
+          <button class="btn ghost" id="exportBtn" type="button">导出备份</button>
+          <button class="btn ghost" id="importBtn" type="button">导入备份</button>
+        </div>
+        <input id="importFile" type="file" accept=".json,application/json" hidden>
+      </div>
+
+      <section class="timeline" aria-labelledby="timelineTitle">
+        <div class="section-head">
+          <h2 id="timelineTitle">时间轴</h2>
+          <p class="meta" id="timelineMeta"></p>
+        </div>
+        <div class="timeline-list" id="timelineList"></div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      数据只保存在这台设备的浏览器里 · 记得偶尔导出备份
+    </footer>
+  </div>
+
+  <div class="modal" id="reportModal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reportTitle" tabindex="-1">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">Markdown · 可直接粘贴</p>
+          <h2 id="reportTitle">本周周报</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="关闭">×</button>
+      </div>
+      <pre class="report-text" id="reportText" tabindex="0"></pre>
+      <div class="modal-actions">
+        <button class="btn primary" id="copyBtn" type="button">复制到剪贴板</button>
+        <button class="btn ghost" type="button" data-close>关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <p class="noscript">「收工三行」需要启用 JavaScript 才能记录和生成周报。</p>
+  </noscript>
+
+  <script src="app.js"></script>
+</body>
+</html>
