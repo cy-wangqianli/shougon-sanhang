@@ -1,0 +1,26 @@
+{
+  "name": "收工三行 · 30 秒收工复盘",
+  "short_name": "收工三行",
+  "description": "每晚只写三行：今天推进了什么、卡在哪、明天第一步。自动聚合成周报。",
+  "lang": "zh-CN",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4efe4",
+  "theme_color": "#f4efe4",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23f4efe4'/%3E%3Cpath d='M136 184h240M136 256h240M136 328h152' stroke='%23221f1a' stroke-width='28' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%23f4efe4'/%3E%3Cpath d='M160 200h192M160 256h192M160 312h120' stroke='%23221f1a' stroke-width='24' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
