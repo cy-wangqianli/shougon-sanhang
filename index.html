@@ -12,12 +12,13 @@
   <meta name="apple-mobile-web-app-title" content="收工三行">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f4efe4'/%3E%3Cpath d='M16 22h32M16 32h32M16 42h20' stroke='%23221f1a' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' fill='%23f4efe4'/%3E%3Cpath d='M42 62h96M42 90h96M42 118h60' stroke='%23221f1a' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="apple-touch-icon-180.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="shell">
+    <p class="storage-warn" id="storageWarn" role="alert" hidden>这次没写进本机存储，请立刻导出备份。</p>
     <header class="masthead">
       <div class="brand-row">
         <span class="brand">收工三行</span>
@@ -113,7 +114,7 @@
             <p class="form-error" id="formError" role="alert" hidden></p>
             <button class="btn primary save-btn" type="submit">
               <span id="saveLabel">保存今日三行</span>
-              <kbd id="saveKbd">Ctrl ↵</kbd>
+              <kbd id="saveKbd">Ctrl+Enter</kbd>
             </button>
           </div>
         </form>
@@ -141,7 +142,7 @@
           <h2 id="timelineTitle">时间轴</h2>
           <p class="meta" id="timelineMeta"></p>
         </div>
-        <div class="timeline-list" id="timelineList"></div>
+        <div class="timeline-list" id="timelineList" tabindex="-1"></div>
       </section>
     </main>
 
@@ -160,9 +161,9 @@
         </div>
         <button class="icon-btn" type="button" data-close aria-label="关闭">×</button>
       </div>
-      <div class="range-switch" id="reportRange" role="tablist" aria-label="周报范围">
-        <button type="button" role="tab" data-range="this" aria-selected="true">本周</button>
-        <button type="button" role="tab" data-range="last" aria-selected="false">上周</button>
+      <div class="range-switch" id="reportRange" role="group" aria-label="周报范围">
+        <button type="button" data-range="this" aria-pressed="true">本周</button>
+        <button type="button" data-range="last" aria-pressed="false">上周</button>
       </div>
       <pre class="report-text" id="reportText" tabindex="0"></pre>
       <p class="report-empty" id="reportEmpty" hidden></p>
@@ -184,10 +185,22 @@
   <script>
     // PWA：注册 Service Worker（版本号写在 sw.js 顶部）
     if ('serviceWorker' in navigator) {
+      var hadController = Boolean(navigator.serviceWorker.controller);
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js').catch(function (error) {
+        navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (registration) {
+          registration.update();
+        }).catch(function (error) {
           console.warn('Service Worker 注册失败', error);
         });
+      });
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadController) {
+          hadController = true;
+          return;
+        }
+        if (window.confirm('检测到新版本，现在刷新？')) {
+          window.location.reload();
+        }
       });
     }
   </script>

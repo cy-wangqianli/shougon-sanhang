@@ -6,7 +6,7 @@
   --card-2: #f7f2e8;
   --ink: #221f1a;
   --ink-2: #5d5549;
-  --ink-3: #7a7163;
+  --ink-3: #6b6255;
   --line: rgba(54, 45, 32, 0.14);
   --line-strong: rgba(54, 45, 32, 0.28);
   --accent: #a34728;
@@ -28,7 +28,7 @@
     --card-2: #232019;
     --ink: #ece4d6;
     --ink-2: #b4aa99;
-    --ink-3: #877e6e;
+    --ink-3: #9a9080;
     --line: rgba(236, 228, 214, 0.13);
     --line-strong: rgba(236, 228, 214, 0.28);
     --accent: #d97752;
@@ -91,6 +91,19 @@ body::before {
   z-index: 1;
   max-width: 760px;
   margin: 0 auto;
+}
+
+/* ---------- 存储告警 ---------- */
+
+.storage-warn {
+  margin: 18px 0 0;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--danger);
+  background: var(--card);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
 }
 
 /* ---------- 顶部 ---------- */
@@ -330,8 +343,7 @@ body::before {
 }
 
 .field textarea::placeholder {
-  color: var(--ink-3);
-  opacity: 0.82;
+  color: var(--ink-2);
 }
 
 .field textarea:focus {
@@ -650,6 +662,16 @@ body::before {
   margin-top: 14px;
 }
 
+.timeline-list:focus {
+  outline: none;
+}
+
+.timeline-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+
 .week-head {
   display: flex;
   align-items: center;
@@ -917,7 +939,7 @@ body::before {
   cursor: pointer;
 }
 
-.range-switch button[aria-selected="true"] {
+.range-switch button[aria-pressed="true"] {
   color: var(--on-accent);
   background: var(--accent);
 }
@@ -1184,6 +1206,23 @@ body.modal-open {
 
   .guide {
     padding: 18px 16px;
+  }
+}
+
+/* ---------- 触摸设备：放大点击目标 ---------- */
+
+@media (pointer: coarse) {
+  .btn,
+  .btn.tiny,
+  .btn.small,
+  .field select,
+  .icon-btn,
+  .week-head {
+    min-height: 44px;
+  }
+
+  .icon-btn {
+    min-width: 44px;
   }
 }
 

@@ -90,13 +90,19 @@
     return { text: '', tag: null };
   }
 
-  function sanitizeEntries(raw) {
+  function isValidDateKey(key) {
+    return DATE_RE.test(key) && dateKey(parseDateKey(key)) === key;
+  }
+
+  function sanitizeEntries(raw, stats) {
     var out = {};
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
     Object.keys(raw).forEach(function (key) {
-      if (!DATE_RE.test(key)) return;
       var day = raw[key];
-      if (!day || typeof day !== 'object' || Array.isArray(day)) return;
+      if (!isValidDateKey(key) || !day || typeof day !== 'object' || Array.isArray(day)) {
+        if (stats) stats.skipped += 1;
+        return;
+      }
       var entry = {
         progress: readLine(day.progress),
         blocker: readLine(day.blocker),
@@ -105,14 +111,37 @@
       };
       if (entry.progress.text || entry.blocker.text || entry.next.text) {
         out[key] = entry;
+      } else if (stats) {
+        stats.skipped += 1;
       }
     });
     return out;
   }
 
-  function readRawEntries() {
+  function showStorageWarn() {
+    if (els.storageWarn) els.storageWarn.hidden = false;
+  }
+
+  function hideStorageWarn() {
+    if (els.storageWarn) els.storageWarn.hidden = true;
+  }
+
+  function probeStorage() {
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
+      var probe = STORAGE_KEY + '.probe';
+      localStorage.setItem(probe, '1');
+      localStorage.removeItem(probe);
+      return true;
+    } catch (error) {
+      console.warn('本地存储不可用', error);
+      return false;
+    }
+  }
+
+  function readRawEntries() {
+    var raw = null;
+    try {
+      raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return {};
       var parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') return {};
@@ -120,6 +149,14 @@
       return parsed;
     } catch (error) {
       console.warn('读取本地记录失败', error);
+      if (raw) {
+        try {
+          localStorage.setItem(STORAGE_KEY + '.broken.' + Date.now(), raw);
+        } catch (backupError) {
+          console.warn('备份损坏数据失败', backupError);
+        }
+      }
+      showStorageWarn();
       return {};
     }
   }
@@ -127,9 +164,12 @@
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries: state.entries }));
+      hideStorageWarn();
+      return true;
     } catch (error) {
       console.warn('写入本地记录失败', error);
-      toast('保存失败：浏览器本地存储不可用');
+      showStorageWarn();
+      return false;
     }
   }
 
@@ -307,6 +347,7 @@
       var cancelBtn = el('button', 'btn tiny', '取消');
       cancelBtn.type = 'button';
       cancelBtn.dataset.action = 'cancel-delete';
+      cancelBtn.dataset.date = key;
       actions.appendChild(confirmBtn);
       actions.appendChild(cancelBtn);
     } else {
@@ -451,10 +492,13 @@
 
     hideFormError();
     state.entries[key] = entry;
-    persist();
+    var saved = persist();
     isEditingToday = false;
     renderAll();
-    toast('已保存 · 连续打卡 ' + computeStreak() + ' 天');
+    if (saved) {
+      toast('已保存 · 连续打卡 ' + computeStreak() + ' 天');
+      els.editTodayBtn.focus();
+    }
   }
 
   function toggleWeek(button) {
@@ -483,9 +527,17 @@
       isEditingToday = false;
     }
 
-    persist();
+    var saved = persist();
     renderAll();
-    toast('已删除 ' + shortDate(date) + ' 的记录');
+    if (saved) toast('已删除 ' + shortDate(date) + ' 的记录');
+    els.timelineList.focus();
+  }
+
+  function focusTimelineAction(action, key) {
+    var button = els.timelineList.querySelector(
+      '[data-action="' + action + '"][data-date="' + key + '"]'
+    );
+    if (button) button.focus();
   }
 
   function handleTimelineClick(event) {
@@ -505,9 +557,11 @@
     if (action === 'ask-delete' && key) {
       pendingDelete = key;
       renderTimeline();
+      focusTimelineAction('confirm-delete', key);
     } else if (action === 'cancel-delete') {
       pendingDelete = null;
       renderTimeline();
+      focusTimelineAction('ask-delete', key);
     } else if (action === 'confirm-delete' && key) {
       deleteEntry(key);
     }
@@ -539,11 +593,14 @@
     if (!days.length) return '';
 
     var weekEnd = addDays(weekStart, 6);
+    var rangeText = weekStart.getFullYear() === weekEnd.getFullYear()
+      ? fullDate(weekStart) + ' – ' + shortDate(weekEnd)
+      : fullDate(weekStart) + ' – ' + fullDate(weekEnd);
     var out = [];
 
     out.push('# 收工三行 · 周报');
     out.push('');
-    out.push(fullDate(weekStart) + ' – ' + shortDate(weekEnd) + ' ｜ ' + label + '记录 ' + days.length + ' 天');
+    out.push(rangeText + ' ｜ ' + label + '记录 ' + days.length + ' 天');
     out.push('');
 
     days.forEach(function (item) {
@@ -591,8 +648,7 @@
 
     Array.prototype.forEach.call(els.reportRange.querySelectorAll('[data-range]'), function (button) {
       var active = button.dataset.range === reportRange;
-      button.setAttribute('aria-selected', active ? 'true' : 'false');
-      button.tabIndex = active ? 0 : -1;
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
     if (!report) {
@@ -621,6 +677,7 @@
 
     lastFocused = document.activeElement;
     els.reportModal.hidden = false;
+    if (els.shell) els.shell.inert = true;
     document.body.classList.add('modal-open');
     els.modalPanel.focus();
   }
@@ -645,6 +702,7 @@
   function closeReport() {
     if (els.reportModal.hidden) return;
     els.reportModal.hidden = true;
+    if (els.shell) els.shell.inert = false;
     document.body.classList.remove('modal-open');
     if (lastFocused && typeof lastFocused.focus === 'function' && document.contains(lastFocused)) {
       lastFocused.focus();
@@ -708,7 +766,7 @@
 
   /* ---------- 备份 ---------- */
 
-  function exportBackup() {
+  function exportBackup(fileName, silent) {
     var payload = {
       app: 'shougon-sanhang',
       version: 1,
@@ -719,14 +777,14 @@
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
-    link.download = 'shougon-sanhang-' + todayKey() + '.json';
+    link.download = fileName || 'shougon-sanhang-' + todayKey() + '.json';
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(function () {
       URL.revokeObjectURL(url);
     }, 1000);
-    toast('备份已导出');
+    if (!silent) toast('备份已导出');
   }
 
   function importBackupFromFile(file) {
@@ -734,12 +792,13 @@
 
     reader.onload = function () {
       var imported;
+      var stats = { skipped: 0 };
       try {
         var data = JSON.parse(String(reader.result));
         var raw = data && typeof data === 'object' && data.entries && typeof data.entries === 'object'
           ? data.entries
           : data;
-        imported = sanitizeEntries(raw);
+        imported = sanitizeEntries(raw, stats);
       } catch (error) {
         toast('导入失败：不是有效的 JSON 备份');
         return;
@@ -751,9 +810,11 @@
         return;
       }
 
-      if (Object.keys(state.entries).length &&
-          !window.confirm('导入会与现有记录合并，同一天以备份内容为准。继续？')) {
-        return;
+      if (Object.keys(state.entries).length) {
+        if (!window.confirm('导入会与现有记录合并，同一天以备份内容为准。继续？')) {
+          return;
+        }
+        exportBackup('shougon-sanhang-before-import-' + todayKey() + '.json', true);
       }
 
       var added = 0;
@@ -767,10 +828,13 @@
         state.entries[key] = imported[key];
       });
 
-      persist();
+      var saved = persist();
       isEditingToday = false;
       renderAll();
-      toast('已导入 ' + keys.length + ' 天 · 新增 ' + added + '，覆盖 ' + replaced);
+      if (saved) {
+        var skippedText = stats.skipped ? ' · 跳过 ' + stats.skipped + ' 条' : '';
+        toast('已导入 ' + keys.length + ' 天 · 新增 ' + added + '，覆盖 ' + replaced + skippedText);
+      }
     };
 
     reader.onerror = function () {
@@ -879,10 +943,12 @@
       count += 1;
     });
 
-    persist();
-    setTimeout(function () {
-      toast('已载入 ' + count + ' 天示例数据');
-    }, 350);
+    var saved = persist();
+    if (saved) {
+      setTimeout(function () {
+        toast('已载入 ' + count + ' 天示例数据');
+      }, 350);
+    }
   }
 
   /* ---------- 提示 ---------- */
@@ -901,6 +967,8 @@
 
   function cacheEls() {
     els = {
+      shell: document.querySelector('.shell'),
+      storageWarn: document.getElementById('storageWarn'),
       todayDate: document.getElementById('todayDate'),
       todayWeekday: document.getElementById('todayWeekday'),
       streak: document.getElementById('streak'),
@@ -944,10 +1012,56 @@
 
   function applyModKey() {
     var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
-    els.saveKbd.textContent = isMac ? '⌘ ↵' : 'Ctrl ↵';
+    els.saveKbd.textContent = isMac ? '⌘+Enter' : 'Ctrl+Enter';
+  }
+
+  var FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), ' +
+    'input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function trapModalFocus(event) {
+    var nodes = Array.prototype.filter.call(
+      els.modalPanel.querySelectorAll(FOCUSABLE),
+      function (node) {
+        return node.offsetParent !== null;
+      }
+    );
+    if (!nodes.length) return;
+
+    var first = nodes[0];
+    var last = nodes[nodes.length - 1];
+    var active = document.activeElement;
+
+    if (event.shiftKey) {
+      if (active === first || !els.modalPanel.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !els.modalPanel.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   function handleKeydown(event) {
+    if (event.key === 'Escape') {
+      if (!els.reportModal.hidden) {
+        closeReport();
+        return;
+      }
+      if (pendingDelete) {
+        var deletingKey = pendingDelete;
+        pendingDelete = null;
+        renderTimeline();
+        focusTimelineAction('ask-delete', deletingKey);
+        return;
+      }
+    }
+
+    if (event.key === 'Tab' && !els.reportModal.hidden) {
+      trapModalFocus(event);
+      return;
+    }
+
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       if (!els.entryForm.hidden) {
         event.preventDefault();
@@ -957,11 +1071,6 @@
           els.entryForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
         }
       }
-      return;
-    }
-
-    if (event.key === 'Escape' && !els.reportModal.hidden) {
-      closeReport();
     }
   }
 
@@ -1011,6 +1120,14 @@
     sync();
   }
 
+  function syncFromStorage() {
+    var next = sanitizeEntries(readRawEntries());
+    if (JSON.stringify(next) === JSON.stringify(state.entries)) return;
+    state.entries = next;
+    if (pendingDelete && !state.entries[pendingDelete]) pendingDelete = null;
+    renderAll();
+  }
+
   function bindEvents() {
     els.entryForm.addEventListener('submit', handleSubmit);
     els.entryForm.addEventListener('input', hideFormError);
@@ -1040,17 +1157,28 @@
       }
     });
 
-    els.exportBtn.addEventListener('click', exportBackup);
+    els.exportBtn.addEventListener('click', function () {
+      exportBackup();
+    });
     els.importBtn.addEventListener('click', function () {
       els.importFile.click();
     });
     els.importFile.addEventListener('change', handleImportChange);
 
     document.addEventListener('keydown', handleKeydown);
+
+    window.addEventListener('storage', function (event) {
+      if (!event.key || event.key === STORAGE_KEY) syncFromStorage();
+    });
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') syncFromStorage();
+    });
   }
 
   function init() {
     cacheEls();
+    if (!probeStorage()) showStorageWarn();
     state.entries = sanitizeEntries(readRawEntries());
     bindEvents();
     applyModKey();
